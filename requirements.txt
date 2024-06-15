@@ -42,8 +42,8 @@ scipy==1.11.3
 tensorboard==2.15.1
 tensorboard-data-server==0.7.2
 tifffile==2023.9.26
-torch==1.13.1
-torchvision==0.14.1
+torch==2.2.0
+torchvision==0.17.0
 tqdm==4.66.1
 tzdata==2023.3
 urllib3==2.1.0

@@ -26,7 +26,7 @@ import pybullet_data as pdata
 from tqdm import tqdm
 
 import util.misc as utils
-from IO_TFdataset_old import build_dataset
+from IO_TFdataset import build_dataset
 from maruya24_rt1.tokenizers.utils import batched_space_sampler, np_to_tensor
 from maruya24_rt1.transformer_network import TransformerNetwork
 from maruya24_rt1.transformer_network_test_set_up import state_space_list
@@ -48,6 +48,20 @@ class Trainer:
         utils.set_seed()
         self.args = args
         self.args = utils.init_distributed_mode(self.args)
+        self.train_dataset, self.val_dataset = build_dataset(
+            data_path=self.args["data_path"],
+            time_sequence_length=self.args["time_sequence_length"],
+            train_val_split=self.args["num_train_episode"],
+            cam_view=self.args["cam_view"],
+            language_embedding_size=self.args["network_configs"][
+                "language_embedding_size"
+            ],
+        )
+        
+        if self.args["distributed"]:
+            self.sampler_train = DistributedSampler(self.train_dataset, shuffle=True)
+            self.sampler_val = DistributedSampler(self.val_dataset, shuffle=False)
+        
         self.checkpoint_dir, self.tensorboard_dir = self.make_log_dir(
             self.args["log_dir"]
         )
@@ -110,7 +124,28 @@ class Trainer:
 
     def train(self):
         print("training")
-
+        # Create dataloader based on distributed or single-machine settings
+        if self.args["distributed"]:
+            # Batch sampler for distributed training
+            batch_sampler_train = torch.utils.data.BatchSampler(
+                self.sampler_train, self.args["batch_size"], drop_last=True
+            )
+            train_dataloader = DataLoader(
+                self.train_dataset,
+                batch_sampler=batch_sampler_train,
+                num_workers=0,
+            )
+        else:
+            # DataLoader for single-machine training
+            train_dataloader = DataLoader(
+                self.train_dataset,
+                batch_size=self.args["batch_size"],
+                num_workers=0,
+                shuffle=True,
+                drop_last=True,
+            )
+        
+        
         # Initialize the TransformerNetwork based on specified configurations
         network_configs = self.args["network_configs"]
         # Modify network configuration based on specific settings
@@ -188,164 +223,119 @@ class Trainer:
             wandb.watch(network, log="all", log_freq=10)
         
         for e in range(epoch_start, self.args["epochs"]):
-            for piece in range(25):
-                network.train()
-                if piece == 0:
-                    es_streams = None
-                self.train_dataset, self.val_dataset, es_streams = build_dataset(
-                    data_path=self.args["data_path"],
-                    time_sequence_length=self.args["time_sequence_length"],
-                    predicting_next_ts=self.args["predicting_next_ts"],
-                    num_train_episode=self.args["num_train_episode"],
-                    num_val_episode=self.args["num_val_episode"],
-                    cam_view=self.args["cam_view"],
-                    language_embedding_size=self.args["network_configs"][
-                        "language_embedding_size"
-                    ],
-                    piece_num=piece,
-                    es_streams=es_streams,
-                )
-                
-                if self.args["distributed"]:
-                    self.sampler_train = DistributedSampler(self.train_dataset, shuffle=True)
-                    self.sampler_val = DistributedSampler(self.val_dataset, shuffle=False)
-                
-                # Create dataloader based on distributed or single-machine settings
-                if self.args["distributed"]:
-                    # Batch sampler for distributed training
-                    batch_sampler_train = torch.utils.data.BatchSampler(
-                        self.sampler_train, self.args["batch_size"], drop_last=True
+            network.train()
+            with tqdm(
+                train_dataloader, dynamic_ncols=True, desc="train"
+            ) as tqdmDataLoader:
+                for _, (obs, action) in enumerate(tqdmDataLoader):
+                    # Perform training steps
+                    optimizer.zero_grad()
+                    network_without_ddp.set_actions(
+                        utils.dict_to_device(action, self.device)
                     )
-                    train_dataloader = DataLoader(
-                        self.train_dataset,
-                        batch_sampler=batch_sampler_train,
-                        num_workers=0,
-                    )
-                else:
-                    # DataLoader for single-machine training
-                    train_dataloader = DataLoader(
-                        self.train_dataset,
+                    network_state = batched_space_sampler(
+                        network_without_ddp._state_space,
                         batch_size=self.args["batch_size"],
-                        num_workers=0,
-                        shuffle=True,
-                        drop_last=True,
                     )
-                
-                with tqdm(
-                    train_dataloader, dynamic_ncols=True, desc="train"
-                ) as tqdmDataLoader:
-                    for _, (obs, action) in enumerate(tqdmDataLoader):
-                        # Perform training steps
-                        optimizer.zero_grad()
-                        network_without_ddp.set_actions(
-                            utils.dict_to_device(action, self.device)
-                        )
-                        network_state = batched_space_sampler(
-                            network_without_ddp._state_space,
-                            batch_size=self.args["batch_size"],
-                        )
-                        network_state = np_to_tensor(network_state)
-                        if self.args["using_proprioception"]:
-                            obs = self.calc_fk(obs)
-                        output_actions, network_state = network(
-                            utils.dict_to_device(obs, self.device),
-                            utils.dict_to_device(network_state, self.device),
-                        )
+                    network_state = np_to_tensor(network_state)
+                    if self.args["using_proprioception"]:
+                        obs = self.calc_fk(obs)
+                    output_actions, network_state = network(
+                        utils.dict_to_device(obs, self.device),
+                        utils.dict_to_device(network_state, self.device),
+                    )
 
-                        loss = network_without_ddp.get_actor_loss().mean()
+                    loss = network_without_ddp.get_actor_loss().mean()
 
-                        loss.backward()
-                        optimizer.step()
+                    loss.backward()
+                    optimizer.step()
 
-                        # Logging metrics during training
-                        if utils.is_main_process():
-                            # Log loss, epoch, and learning rate
-                            # self.writer_train.add_scalar(
-                            #     tag="loss_ce",
-                            #     global_step=self.train_step,
-                            #     scalar_value=loss.cpu().data.numpy(),
-                            #     walltime=time.time(),
-                            # )
-                            # self.writer_train.add_scalar(
-                            #     tag="epoch",
-                            #     global_step=self.train_step,
-                            #     scalar_value=e,
-                            #     walltime=time.time(),
-                            # )
-                            # self.writer_train.add_scalar(
-                            #     tag="lr",
-                            #     global_step=self.train_step,
-                            #     scalar_value=optimizer.state_dict()["param_groups"][0][
-                            #         "lr"
-                            #     ],
-                            #     walltime=time.time(),
-                            # )
-                            wandb.log(
-                                data={
-                                    "loss_ce": loss.cpu().data.numpy(),
-                                    "epoch": e,
-                                    "lr": optimizer.state_dict()["param_groups"][0]["lr"],
-                                    "train_step": self.train_step,
-                                },
-                            )
-                            
-                        self.train_step += 1
-                        tqdmDataLoader.set_postfix(
-                            ordered_dict={
+                    # Logging metrics during training
+                    if utils.is_main_process():
+                        # Log loss, epoch, and learning rate
+                        # self.writer_train.add_scalar(
+                        #     tag="loss_ce",
+                        #     global_step=self.train_step,
+                        #     scalar_value=loss.cpu().data.numpy(),
+                        #     walltime=time.time(),
+                        # )
+                        # self.writer_train.add_scalar(
+                        #     tag="epoch",
+                        #     global_step=self.train_step,
+                        #     scalar_value=e,
+                        #     walltime=time.time(),
+                        # )
+                        # self.writer_train.add_scalar(
+                        #     tag="lr",
+                        #     global_step=self.train_step,
+                        #     scalar_value=optimizer.state_dict()["param_groups"][0][
+                        #         "lr"
+                        #     ],
+                        #     walltime=time.time(),
+                        # )
+                        wandb.log(
+                            data={
+                                "loss_ce": loss.cpu().data.numpy(),
                                 "epoch": e,
-                                "train_name": self.train_name[-5:],
-                                "gpu_memory_used": str(
-                                    round(
-                                        torch.cuda.max_memory_allocated() / (1024**3), 2
-                                    )
-                                )
-                                + " GB",
-                                "loss": loss.item(),
                                 "lr": optimizer.state_dict()["param_groups"][0]["lr"],
-                            }
+                                "train_step": self.train_step,
+                            },
                         )
-
-                # Perform validation at specified intervals
-                if (e + 1) % self.args["val_interval"] == 0:
-                    checkpoint_filename = os.path.join(
-                        self.checkpoint_dir, str(e) + "-p" + str(piece) + "-checkpoint.pth"
+                        
+                    self.train_step += 1
+                    tqdmDataLoader.set_postfix(
+                        ordered_dict={
+                            "epoch": e,
+                            "train_name": self.train_name[-5:],
+                            "gpu_memory_used": str(
+                                round(
+                                    torch.cuda.max_memory_allocated() / (1024**3), 2
+                                )
+                            )
+                            + " GB",
+                            "loss": loss.item(),
+                            "lr": optimizer.state_dict()["param_groups"][0]["lr"],
+                        }
                     )
-                    checkpoint = {
-                        "model_state_dict": network_without_ddp.state_dict()
-                        if self.args["distributed"]
-                        else network.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "scheduler_state_dict": scheduler.state_dict(),
-                        "action_space": self._action_space,
-                        "epoch": e,
-                        "piece": piece,
-                    }
-                    utils.save_on_master(checkpoint, checkpoint_filename)
-                    if self.args["distributed"]:
-                        # Barrier synchronization for distributed training
-                        print(
-                            f"Process {torch.distributed.get_rank()} has reached the end of train."
-                        )
-                        torch.distributed.barrier()
-                        self.val(
-                            network_without_ddp=network_without_ddp,
-                            epoch=e,
-                            piece=piece,
-                            val_dataset=self.val_dataset,
-                            sampler_val=self.sampler_val,
-                        )
-                        print(
-                            f"Process {torch.distributed.get_rank()} has reached the end of val."
-                        )
-                        torch.distributed.barrier()
-                    else:
-                        self.val(
-                            network_without_ddp=network,
-                            epoch=e,
-                            piece=piece,
-                            val_dataset=self.val_dataset,
-                        )
-                scheduler.step()
+
+            # Perform validation at specified intervals
+            if (e + 1) % self.args["val_interval"] == 0:
+                checkpoint_filename = os.path.join(
+                    self.checkpoint_dir, str(e) + "-checkpoint.pth"
+                )
+                checkpoint = {
+                    "model_state_dict": network_without_ddp.state_dict()
+                    if self.args["distributed"]
+                    else network.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scheduler_state_dict": scheduler.state_dict(),
+                    "action_space": self._action_space,
+                    "epoch": e,
+                }
+                utils.save_on_master(checkpoint, checkpoint_filename)
+                if self.args["distributed"]:
+                    # Barrier synchronization for distributed training
+                    print(
+                        f"Process {torch.distributed.get_rank()} has reached the end of train."
+                    )
+                    torch.distributed.barrier()
+                    self.val(
+                        network_without_ddp=network_without_ddp,
+                        epoch=e,
+                        val_dataset=self.val_dataset,
+                        sampler_val=self.sampler_val,
+                    )
+                    print(
+                        f"Process {torch.distributed.get_rank()} has reached the end of val."
+                    )
+                    torch.distributed.barrier()
+                else:
+                    self.val(
+                        network_without_ddp=network,
+                        epoch=e,
+                        val_dataset=self.val_dataset,
+                    )
+            scheduler.step()
 
     def calc_fk(self, obs):
         """
@@ -374,7 +364,7 @@ class Trainer:
         return obs
 
     @torch.no_grad()
-    def val(self, network_without_ddp, epoch, piece, val_dataset, sampler_val=None):
+    def val(self, network_without_ddp, epoch, val_dataset, sampler_val=None):
         # Create directories to store validation results if they don't exist
         if (
             not os.path.isdir(os.path.join(self.checkpoint_dir, "val_results"))
@@ -468,8 +458,6 @@ class Trainer:
                 fn = (
                     "epoch_"
                     + str(epoch)
-                    + "_piece_"
-                    + str(piece)
                     + "_step_"
                     + str(idx)
                     + "_gpu_"

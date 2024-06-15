@@ -123,11 +123,3 @@ Our dataset follows a specific file structure:
 Simliar to Robomimic's lift mission [robomimic](https://robomimic.github.io/), we collected dataset from third-person and first-person perspectives.
 
 You can download our dataset collected from PyBullet [IO_open_dataset](https://drive.google.com/uc?export=download&id=1RoTxnipQf2SIXqzvroDOXAleNvvNIIwZ).
-
-## Contacts
-
-Join wechat group for discussion
-
-
-![wechat group](img/wechatgroup.jpg)
-
