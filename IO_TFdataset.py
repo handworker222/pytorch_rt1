@@ -30,31 +30,10 @@ def build_dataset(
 
     Parameters:
     - data_path(str): locates the path where the dataset is stored
-            the dataset path should have the following file structures:
-                - [robotname]_[taskname]
-                    - [cam_view_0]
-                        - data_000
-                            - rgb # where those image stored
-                                - image_001.png
-                                - image_002.png
-                                - ...
-                            - results.csv # robot actions stored
-                            - results_raw.csv # joint and target object position stored
-                        - data_001
-                        - ...
-                    - [cam_view_1]
-                        - data_000
-                        - data_001
-                        - ...
-                    - ...
     - time_sequence_length(int) : number of history length input for RT-1 model,
         6 means current frame image and past 5 frames of images will be packed and input to RT-1
-    - predicting_next_ts(bool) : in our dataset's results.csv and results_raw.csv, we stored current frame's action and joint status.
-        if we want to predict next frame's action, this option needs to be True and result in the 1 step offset reading on csv files
-        this differs between the samplings method of different dataset.
-    - num_train_episode(int) : specifies numbers of training episodes
-    - num_train_episode(int) : specifies numbers of validation episodes
     - cam_view(list of strs) : camera views used for training.
+    - language_embedding_size : size of language embedding
 
     Returns:
     - train_dataset(torch.utils.data.Dataset)
@@ -159,16 +138,6 @@ class TFRecordDataset(Dataset):
         return sample_obs, sample_action
 
     def get_image(self):
-        """
-        This function generates the step for current frame and history frames
-        Parameters:
-        - img_fns (list of int or None): indices of frames used in a specific step
-        - episode_index (int): index of episode which the step belongs to
-        
-        Returns:
-        - keys(list of tensors): history steps for each data
-        
-        """
         imgs = []
         step = self._eps_step[1]
         for img_fn in range(step-self._time_sequence_length+1, step+1):
@@ -184,12 +153,6 @@ class TFRecordDataset(Dataset):
         return torch.stack(imgs, dim=0) / 255.0
     
     def get_language_instruction(self):
-        """
-        since we are only training single-task model, this language embedding is set as constant.
-        modify it to language instructions if multi-task model is training.
-        it seems that google directly loads embedded language instruction from its language model
-        this results in our loading a language embedding instead of language sentence
-        """
         language_embedding = np.zeros([self._time_sequence_length, self._language_embedding_size])
         step = self._eps_step[1]
         for i, img_fn in enumerate(range(step-self._time_sequence_length+1, step+1)):
@@ -199,19 +162,6 @@ class TFRecordDataset(Dataset):
         return language_embedding
 
     def get_ee_data(self):
-        """
-        This function reads ground truth robot actions, robot joint status and target object position and orientation:
-        Parameters:
-        - episode_index(int): index of episode which the step belongs to
-        - query_index(tensor): index where exact data is read, padded zeros has a special index of -1
-        - pad_step_num(int): how many timestep of zeros is padded
-        Returns:
-        - ee_pos_cmd(np.array): stores the ground truth command for robot move in position(x, y, z)
-        - ee_rot_cmd(np.array): stores the ground truth command for robot move in rotation(rx, ry, rz)
-        - gripper_cmd(np.array): stores the ground truth command for robot's gripper open or close
-        - joint(np.array): stores the robot's joint status, which can be used to calculate ee's position
-        - tar_obj_pose: stores the target object's position and orientation (x, y, z, rx, ry, rz)
-        """
         step = self._eps_step[1]
         # position has 3 dimensions [x, y, z]
         ee_pos_cmd = np.zeros([self._time_sequence_length, 3])
@@ -236,15 +186,6 @@ class TFRecordDataset(Dataset):
 
 
     def get_episode_status(self):
-        """
-        This function is to find whether current frame and history frame is start or middle or end of the episode:
-        Parameters:
-        - episode_length(int): length of current episode
-        - query_index(tensor): index where exact data is read, padded zeros has a special index of -1
-        - pad_step_num(int): how many timestep of zeros is padded
-        Returns:
-        - episode_status(np.array): specifies status(start, middle or end) of each frame in history
-        """
         step = self._eps_step[1]
         start_idx = step - self._time_sequence_length + 1 if step >= self._time_sequence_length - 1 else 0
         end_idx = step

@@ -35,9 +35,6 @@ def build_dataset(
         "wrist": 6,
     }
     
-    # with open(os.path.join(data_path, "dataset_info.json"), "r") as f:
-    #     info = json.load(f)
-    # episode_length = info["episode_length"]
     if piece_num == 0:
         b_streams = tfds.builder_from_directory(data_path)
         ds_streams = b_streams.as_dataset(split="train")
@@ -50,10 +47,6 @@ def build_dataset(
         episodes.append(t_streams)
         episode_length.append(len(t_streams))
     
-    # episode_dirs = sorted(glob.glob(data_path + "/*/"))
-    # assert len(episode_dirs) == len(
-        # episode_length
-    # ), "length of episode directories and episode length not equal, check dataset's dataset_info.json"
     perm_indice = torch.randperm(len(episodes)).tolist()
     dirs_lengths = dict(
         episodes=np.array(episodes)[perm_indice],
@@ -61,18 +54,12 @@ def build_dataset(
     )
     train_episodes = dirs_lengths["episodes"][:num_train_episode]
     train_episode_length = dirs_lengths["episode_length"][:num_train_episode]
-    # val_episodes = dirs_lengths["episodes"][
-    #     num_train_episode : num_train_episode + num_val_episode
-    # ]
-    # val_episode_length = dirs_lengths["episode_length"][
-    #     num_train_episode : num_train_episode + num_val_episode
-    # ]
-    if piece_num == 24:
-        val_episodes = dirs_lengths["episodes"][np.array([ 25,  59,  30,  87,  5])]
-        val_episode_length = dirs_lengths["episode_length"][np.array([ 25,  59,  30,  87,  5])]
-    else:
-        val_episodes = dirs_lengths["episodes"][np.array([ 25,  59,  30,  87,  5])]
-        val_episode_length = dirs_lengths["episode_length"][np.array([ 25,  59,  30,  87,  5])]
+    val_episodes = dirs_lengths["episodes"][
+        num_train_episode : num_train_episode + num_val_episode
+    ]
+    val_episode_length = dirs_lengths["episode_length"][
+        num_train_episode : num_train_episode + num_val_episode
+    ]
 
     train_dataset = IODataset(
         episodes=train_episodes,
@@ -114,31 +101,10 @@ class IODataset(Dataset):
         self._episode_length = episode_length
         self.querys = self.generate_history_steps(episode_length)
         self._episodes = episodes
-        # self.keys_image = self.generate_fn_lists(self._episodes)
         self.values, self.num_zero_history_list = self.organize_file_names()
         self._robot_dof = robot_dof
         self._language_embedding_size = language_embedding_size
-
-    # def generate_fn_lists(self, episode_dirs):
-    #     """
-    #     This function globs all the image path in the dataset
-    #     Parameters:
-    #     - episode_dirs(list of strs): directories where image is stored, etc:
-    #         - [robotname]_[taskname]
-    #             - [cam_view_0]
-    #                 - data_000
-    #                 - data_001
-    #                 - data_002
-    #                 - ...
-    #     Returns:
-    #     - keys(list of strs): all globbed image filename in a list
-    #     """
-    #     keys = []
-    #     for ed in episode_dirs:
-    #         image_files = sorted(glob.glob(f"{ed}rgb/*.png"))
-    #         keys.append(image_files)
-    #     return keys
-
+    
     def generate_history_steps(self, episode_length):
         """
         This function generates the step for current frame and history frames
@@ -272,22 +238,6 @@ class IODataset(Dataset):
         """
         start_idx = query_index[(query_index > -1).nonzero()[0, 0]]
         end_idx = query_index[-1]
-        # visual_data_filename = f"{episode_dir}result.csv"
-        # raw_data = pd.read_csv(visual_data_filename)
-        # visual_data_filename_raw = f"{episode_dir}result_raw.csv"
-        # raw_raw_data = pd.read_csv(visual_data_filename_raw)
-        # if self.predicting_next_ts:
-        #     """
-        #     if predicting next timestep's results, then we shift first column to last column
-        #     """
-        #     first_row = raw_data.iloc[0]
-        #     raw_data = raw_data.iloc[1:]
-        #     raw_data = pd.concat([raw_data, first_row.to_frame().T], ignore_index=True)
-        #     first_row = raw_raw_data.iloc[0]
-        #     raw_raw_data = raw_raw_data.iloc[1:]
-        #     raw_raw_data = pd.concat(
-        #         [raw_raw_data, first_row.to_frame().T], ignore_index=True
-        #     )
         # position has 3 dimensions [x, y, z]
         ee_pos_cmd = np.zeros([pad_step_num, 3])
         # rotation has 3 dimensions [rx, ry, rz]
@@ -382,12 +332,6 @@ class IODataset(Dataset):
         return ee_pos_cmd, ee_rot_cmd, gripper_cmd, joint, tar_obj_pose
 
     def get_language_instruction(self, img_fns, episode_index):
-        """
-        since we are only training single-task model, this language embedding is set as constant.
-        modify it to language instructions if multi-task model is training.
-        it seems that google directly loads embedded language instruction from its language model
-        this results in our loading a language embedding instead of language sentence
-        """
         language_embedding = np.zeros([self._time_sequence_length, self._language_embedding_size])
         for i, img_fn in enumerate(img_fns):
             if img_fn != None:
