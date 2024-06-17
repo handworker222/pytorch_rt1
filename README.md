@@ -6,6 +6,9 @@ This repository contains complete PyTorch implementation for **RT-1** based on t
 
 **Try our implementation in [Colab](https://drive.google.com/file/d/18nWZ6pgy2_0fS8BjZsUiTjOFaE6WXMi3/view?usp=sharing)**
 
+## Update
+Now we support the tensorflow dataset even though the implementation of the PyTorch Dataset is naive. What's more, `IO_tester_torch.py` is to start an RT-1 server and wait for receiving the observation during inference.
+
 ## Acknowledgements
 
 - **maruya24**: For their work on RT-1, which serves as the foundation for this implementation - [maruya24's RT-1 GitHub](https://github.com/maruya24/pytorch_robotics_transformer)

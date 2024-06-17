@@ -21,53 +21,8 @@ import util.misc as utils
 import tensorflow_hub as hub
 import matplotlib.image
 
-
-
-# from octo.model.octo_model import OctoModel
-# import jax
-# model = OctoModel.load_pretrained("/mnt/octo_model_from_huggingface/octo_model/octo-small")
-# model = OctoModel.load_pretrained("/mnt/data/octo_model/octo-base")
-
 class RT1Server:
     def __init__(self):
-        # # octo base model
-        # # self.model = OctoModel.load_pretrained("/mnt/octo_model_from_huggingface/octo_model/octo-base")
-
-        # # root view
-        # # self.model = OctoModel.load_pretrained("/mnt/octo_chekpoints/octo_finetune/octo_finetune/experiment_20240119_050839")
-        
-        # # root view + wrist view
-        # # self.model = OctoModel.load_pretrained("/mnt/octo_chekpoints/octo_finetune/octo_finetune/experiment_20240121_124517")
-
-        # # front view + wrist view
-        # # self.model = OctoModel.load_pretrained("/mnt/octo_chekpoints/octo_finetune/octo_finetune/experiment_20240123_075307")
-
-        # # v1.0.1 front + wrist view
-        # # self.model = OctoModel.load_pretrained("/mnt/octo_chekpoints/octo_finetune/octo_finetune/experiment_20240124_143633",step=20000)
-
-
-        # checkpoints = {
-        #     "v1.1.0_ma":("/mnt/octo_chekpoints/octo_finetune/octo_finetune/experiment_20240202_043410",20000),
-        #     "v1.1.0_km":("/mnt/octo_chekpoints/octo_finetune/octo_finetune/experiment_20240202_150244",10000),
-        #     "v1.1.1_ma":("/mnt/octo_chekpoints/octo_finetune/octo_finetune/experiment_20240203_153723",50000),
-        #     "v1.1.0_ma_root":("/mnt/octo_chekpoints/octo_finetune/octo_finetune/experiment_20240205_013029",30000),
-        #     "v2.0.0_ma":("/mnt/octo_chekpoints/octo_finetune/octo_finetune_2.0/experiment_20240205_012613",30000),
-        #     "vb.0.0_ma":("/mnt/octo_chekpoints/octo_finetune/octo_finetune_from_base_model/experiment_20240215_080141",20000), # octo base fine-tune
-        # }
-        # # v1.1.0 front + wrist view with math delta
-        # # self.model = OctoModel.load_pretrained(checkpoints["v1.1.0_ma"][0],step=20000)
-
-        # # v1.1.0 front + wrist view with kinematic delta
-        # # self.model = OctoModel.load_pretrained(checkpoints["v1.1.0_km"][0],step=10000)
-        
-        # # v1.1.1 front + wrist view with math delta, single obj scene
-        # # self.model = OctoModel.load_pretrained(checkpoints["v1.1.1_ma"][0])
-
-        # # v1.1.0 root + wrist view with math delta
-        # # self.model = OctoModel.load_pretrained(checkpoints["v1.1.0_ma_root"][0],step=30000)
-
-        # # v2.0.0 front + wrist view with math delta, multi obj+single obj mixed scene
-        # self.model = OctoModel.load_pretrained(checkpoints["v2.0.0_ma"][0],step=20000)
         
         with open("train_config.json", "r") as f:
             self.args = json.load(f)
@@ -175,86 +130,6 @@ class RT1Server:
                 else:
                     print("get msg lens error!")
                     return False
-        
-    """
-    def rt1_inference(self,msg,has_wrist):
-        task_text = msg["task"]
-        img_primary = np.array(msg["img_primary"],dtype=np.uint8)
-        img_wrist = np.array(msg["img_wrist"],dtype=np.uint8)
-        print("task text:",self.task_text)
-        
-        if task_text == self.task_text:
-            print(111)
-            if len(self.his_img)>0:
-                input_primary_imgs = np.stack([self.his_img[0],img_primary])[None]
-                input_wrist_imgs = np.stack([self.his_img_wrist[0],img_wrist])[None]
-                pad_mask = np.full((1, input_primary_imgs.shape[1]), True, dtype=bool)
-            else:
-                input_primary_imgs = np.stack([img_primary])[None]
-                input_wrist_imgs = np.stack([img_wrist])[None]
-                pad_mask = np.full((1, input_primary_imgs.shape[1]), True, dtype=bool)
-            
-            if has_wrist:
-                observation = {
-                    'image_primary': input_primary_imgs,
-                    "image_wrist":input_wrist_imgs,
-                    'pad_mask': pad_mask}
-            else:
-                observation = {
-                    'image_primary': input_primary_imgs,
-                    # "image_wrist":input_wrist_imgs,
-                    'pad_mask': pad_mask}
-
-            norm_actions = self.model.sample_actions(observation, self.task, rng=jax.random.PRNGKey(0))
-            norm_actions = norm_actions[0]   # remove batch
-            actions = (
-                norm_actions * self.model.dataset_statistics['action']['std']
-                + self.model.dataset_statistics['action']['mean']
-            )
-            print("action:",actions)
-
-            self.his_img.append(img_primary)
-            self.his_img_wrist.append(img_wrist)
-
-            return actions[0]
-
-
-        else:
-            print(222)
-            self.task_text = task_text
-            self.task = self.model.create_tasks(texts=[self.task_text])
-            self.his_img = deque(maxlen=1)
-            self.his_img_wrist = deque(maxlen=1)
-
-
-            input_primary_imgs = np.stack([img_primary])[None]
-            input_wrist_imgs = np.stack([img_wrist])[None]
-            pad_mask = np.full((1, input_primary_imgs.shape[1]), True, dtype=bool)
-
-            if has_wrist:
-                observation = {
-                    'image_primary': input_primary_imgs,
-                    "image_wrist":input_wrist_imgs,
-                    'pad_mask': pad_mask}
-            else:
-                observation = {
-                    'image_primary': input_primary_imgs,
-                    # "image_wrist":input_wrist_imgs,
-                    'pad_mask': pad_mask}
-
-            norm_actions = self.model.sample_actions(observation, self.task, rng=jax.random.PRNGKey(0))
-            norm_actions = norm_actions[0]   # remove batch
-            actions = (
-                norm_actions * self.model.dataset_statistics['action']['std']
-                + self.model.dataset_statistics['action']['mean']
-            )
-            print("action:",actions)
-
-            self.his_img.append(img_primary)
-            self.his_img_wrist.append(img_wrist)
-            
-            return actions[0]
-    """
         
 
     def rt1_inference(self,msg,has_wrist):
@@ -386,7 +261,6 @@ class RT1Server:
 
 
 
- 
 
 if __name__ == "__main__":
     os = RT1Server()
